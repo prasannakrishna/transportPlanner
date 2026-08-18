@@ -13,9 +13,6 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: false
-
-logging:
-  config: classpath:logback-observability.xml
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
@@ -31,6 +28,9 @@ logging:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+logging:
+  config: classpath:logback-observability.xml
 
 service:
   core:
