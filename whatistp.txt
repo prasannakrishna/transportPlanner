@@ -1,0 +1,172 @@
+ Transport Plan TP-2026-00012
+  ├── Vehicle: TX-1234 (Truck)
+  ├── Driver: Mike Johnson
+  ├── Date: Monday March 10
+  ├── Route: Austin → New York → Miami
+  │
+  ├── Carries:
+  │   ├── SO from GreenLeaf (200kg Jaggery) → Store-X
+  │   ├── SO from BambooWorks (50kg Brushes) → Store-X
+  │   └── SO from HerbalGrow (75kg Tea) → Store-Y
+  │
+  └── Stops:
+      ├── Stop 1: Pickup all from Austin area
+      ├── Stop 2: Drop at Store-X (250kg)
+      └── Stop 3: Drop at Store-Y (75kg)
+
+  So:
+
+  - 1 TP ≠ 1 RTS (it can carry multiple RTS orders)
+  - 1 TP ≠ 1 seller (it can carry goods from multiple sellers)
+  - 1 TP = 1 vehicle, 1 trip, carrying everything that fits on that route for that day
+
+  If the total weight exceeds vehicle capacity → split into 2 TPs (2 vehicles).
+  This is the plan immutability vs. amendment problem. Here's how enterprise TMS handles it:
+
+    The Rule: Once a Transport Plan is ACTIVE, it's frozen.
+
+    Transport Plan Lifecycle:
+
+      DRAFT ──▶ PLANNED ──▶ ACTIVE ──▶ COMPLETED
+        │           │           │
+        │ Can add   │ Can add   │ FROZEN — no changes
+        │ RTS here  │ RTS here  │ New RTS → new plan
+        │           │           │
+        ▼           ▼           ▼
+      "Open for    "Confirmed  "Vehicle dispatched,
+       batching"    but not      can't modify"
+                    dispatched"
+
+    What happens when a new RTS arrives:
+
+    ┌─────────────┬────────────────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────────┐
+    │ Plan Status │ What happens                                                                           │ Cost impact                                │
+    ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+    │ DRAFT       │ Add RTS to existing plan. Recalculate cost, redistribute among all sellers.            │ Cost per seller decreases (shared vehicle) │
+    ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+    │ PLANNED     │ Add RTS if vehicle has capacity. Recalculate. Notify affected sellers of updated cost. │ Cost update sent to all sellers in plan    │
+    ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+    │ ACTIVE      │ Cannot modify. Create a NEW plan for the new RTS.                                      │ New RTS gets its own cost quote            │
+    ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────┤
+    │ COMPLETED   │ N/A                                                                                    │ N/A                                        │
+    └─────────────┴────────────────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────┘
+
+    Cost Distribution Model:
+
+    Plan TP-001 (DRAFT): Vehicle cost = ₹6,000 for Austin → NY → Miami route
+
+    Initially (2 sellers):
+      GreenLeaf: 200kg → pays ₹4,000 (200/300 × ₹6,000)
+      BambooWorks: 100kg → pays ₹2,000 (100/300 × ₹6,000)
+
+    New RTS arrives (HerbalGrow: 75kg) — plan still DRAFT:
+      GreenLeaf: 200kg → pays ₹3,200 (200/375 × ₹6,000)  ← REDUCED
+      BambooWorks: 100kg → pays ₹1,600 (100/375 × ₹6,000) ← REDUCED
+      HerbalGrow: 75kg → pays ₹1,200 (75/375 × ₹6,000)   ← NEW
+
+    Everyone benefits from consolidation.
+
+    Should we notify sellers of cost changes?
+
+    Yes, but only in PLANNED state. Here's the notification logic:
+
+    ┌─────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────┐
+    │ State transition        │ Notification                                                                           │
+    ├─────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────┤
+    │ DRAFT → new RTS added   │ No notification (plan not confirmed yet)                                               │
+    ├─────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────┤
+    │ PLANNED → new RTS added │ Notify ALL sellers: "Your shipment cost updated from ₹X to ₹Y (consolidation benefit)" │
+    ├─────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────┤
+    │ PLANNED → ACTIVE        │ Final cost locked. Notify all: "Your shipment is dispatched. Final cost: ₹Z"           │
+    └─────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────┘
+
+    The answer to your question:
+
+    │ "Another RTS came in, how are you updating the transport plan?"
+
+    - If plan is DRAFT/PLANNED and vehicle has capacity → add to existing plan, recalculate cost pro-rata by weight, notify sellers
+    - If plan is ACTIVE (vehicle already dispatched) → create new plan for the new RTS
+    - Cost is never retroactively changed after ACTIVE status
+Who creates a Transport Plan, and When?
+
+  There are 3 triggers:
+
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Trigger 1: Automatic — Planning Engine (Cron Job)
+
+  Who: ContractBasedPlanningService (scheduled job in transportPlanner)
+
+  When: Runs on cron (e.g., every hour, or at contract-defined pickup windows like 6am/12pm/6pm)
+
+  How: Fetches all BOOKED RTS orders → groups by carrier+origin → creates/amends plans
+
+  Cron fires at 6:00 AM
+    → Fetch all RTS with status=BOOKED
+    → Found 5 orders for FastMove from Austin
+    → Existing DRAFT plan for FastMove+Austin?
+       YES → add to it
+       NO → create new plan
+    → Plan status = DRAFT
+
+  Use case: Contract-based. Carrier picks up daily at fixed time. System batches all ready orders.
+
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Trigger 2: Automatic — Kafka Event (Demand-based, Immediate)
+
+  Who: RtsCreatedConsumer in transportPlanner (listens to transport.rts.created)
+
+  When: Immediately after seller selects a carrier (from the quote comparison UI)
+
+  How: Seller clicks "Select Carrier" → carrierService publishes rts.created → transportPlanner creates DIRECT plan
+
+  Seller selects FastMove for their shipment
+    → carrierService: RTS status = BOOKED, publishes Kafka event
+    → transportPlanner consumes event
+    → If mode=IMMEDIATE: create DIRECT plan now
+    → If mode=BATCHED: wait for next cron run
+
+  Use case: Ad-hoc/spot booking. Seller wants it shipped NOW, not at next batch window.
+
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Trigger 3: Manual — API Call (Logistics Coordinator)
+
+  Who: Logistics coordinator/dispatcher via UI or API
+
+  When: When they want to manually plan a complex route (e.g., CROSSDOCK with specific hub)
+
+  How: Calls POST /api/v1/transport/plans with full plan details
+
+  Coordinator sees 10 pending RTS orders in logistics dashboard
+    → Decides: "These 4 should go via Houston hub (crossdock)"
+    → Manually creates plan with planType=CROSSDOCK, hubLocation=Houston
+    → Selects which RTS orders to include
+
+  Use case: Complex multi-seller, multi-destination scenarios where auto-planning isn't optimal.
+
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Summary Table
+
+  ┌─────────────────────────┬───────────────────────────────────────┬─────────────────────────────────────────┬────────────────────────────────────────────────┬────────────────────────────────────────────┐
+  │ Trigger                 │ Who                                   │ When                                    │ Plan Type                                      │ Config                                     │
+  ├─────────────────────────┼───────────────────────────────────────┼─────────────────────────────────────────┼────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ Cron job                │ System (ContractBasedPlanningService) │ Every hour / pickup window              │ Auto-selected (DIRECT/CONSOLIDATION/CROSSDOCK) │ transport.planning.cron                    │
+  ├─────────────────────────┼───────────────────────────────────────┼─────────────────────────────────────────┼────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ Kafka event             │ System (RtsCreatedConsumer)           │ Immediately on seller carrier selection │ DIRECT (single SO)                             │ transport.planning.mode=IMMEDIATE          │
+  ├─────────────────────────┼───────────────────────────────────────┼─────────────────────────────────────────┼────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ Manual API              │ Logistics coordinator                 │ Anytime via dashboard                   │ Any (user chooses)                             │ POST /api/v1/transport/plans               │
+  ├─────────────────────────┼───────────────────────────────────────┼─────────────────────────────────────────┼────────────────────────────────────────────────┼────────────────────────────────────────────┤
+  │ Planning engine trigger │ Coordinator via API                   │ On-demand                               │ Auto-selected                                  │ POST /api/v1/transport/planning-engine/run │
+  └─────────────────────────┴───────────────────────────────────────┴─────────────────────────────────────────┴────────────────────────────────────────────────┴────────────────────────────────────────────┘
+
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  The lifecycle after creation:
+
+  Created (DRAFT) → Confirmed (PLANNED) → Dispatched (ACTIVE) → Done (COMPLETED)
+         │                  │                      │
+    Can add more RTS   Can add more RTS      FROZEN — no changes
+    No notifications   Notifies sellers      New RTS → new plan

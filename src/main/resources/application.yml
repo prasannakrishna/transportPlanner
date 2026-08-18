@@ -1,0 +1,55 @@
+server:
+  port: 8108
+
+spring:
+  application:
+    name: transportPlanner
+  datasource:
+    url: jdbc:postgresql://localhost:5432/transportdb
+    username: postgres
+    password:
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+
+logging:
+  config: classpath:logback-observability.xml
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: transport-planner
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+service:
+  core:
+    api-configs:
+      contract-by-id:
+        host: http://localhost:8096
+        path: /api/v1/contracts/{id}
+        method: GET
+      carrier-rts-booked:
+        host: http://localhost:8084
+        path: /api/v1/carrier/rts?status=BOOKED
+        method: GET
+
+transport:
+  planning:
+    cron: "0 0 * * * *"
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs

@@ -1,0 +1,45 @@
+get the rts
+get the contract
+get carrierbookingresponse
+
+get if the seller agreed to use network logistics/
+
+mainly 4 types of plans
+
+
+Now TP costlier faster
+Source 1
+Destination 1
+DOne
+
+
+2nd plan slightly cheaper efficient delivery but slightly more time taking
+Source 1, source 2 source 3
+Destination 1
+Done
+
+3rd plan mostly same cost and time
+Source 1
+Destination1 destination2 destination 3
+Done
+here it is e com order directly to customer. so
+
+4th plan cheapest -slow, complex and use partner network
+Source1 source 2 source 3
+Crossdock1 repackage with atleast one hub
+Dest 1 Dest 2 Dest 3
+
+in 2nd and 3rd plan it involves multiple rts from different sellers and multiple warehouse/store
+respectively.
+
+in 4th plan first group rts based on source locations of rts. then group destination locations
+based on destination locations.
+now create consignments.based on destination locations.
+now create transport shipments from these consignments. ideally which can fit in single vehicle.
+find hub where transport shipment can be dismantled/aggregated to consignments.
+create transport shipment again from hub to final locations be it store or warehouse.
+this hub should be warehouse where cross docking can happen. now all these sellers should be ready
+for logistic contract where he is ok for using logistic partner networks.
+
+
+

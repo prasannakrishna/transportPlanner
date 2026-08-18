@@ -1,0 +1,168 @@
+app:
+  planner:
+    # Cross-dock hubs
+    cross-dock-hubs:
+      - id: "CD01"
+        name: "Pune Cross-Dock"
+        latitude: 18.5204
+        longitude: 73.8567
+      - id: "CD02"
+        name: "Nagpur Cross-Dock"
+        latitude: 21.1458
+        longitude: 79.0882
+
+    # Mock Carriers
+    carriers:
+      - carrierId: "CAR001"
+        name: "Prime Logistics"
+        serviceAreas: ["India"]
+      - carrierId: "CAR002"
+        name: "Speedy Delivery"
+        serviceAreas: ["India"]
+      - carrierId: "CAR003"
+        name: "Econ Transport"
+        serviceAreas: ["India"]
+
+    # Mock Contracts
+    contracts:
+      - contractId: "CON001"
+        carrierId: "CAR001"
+        ratePerKm: 5.0
+        minCharge: 100.0
+      - contractId: "CON002"
+        carrierId: "CAR002"
+        ratePerKm: 6.5
+        minCharge: 80.0
+      - contractId: "CON003"
+        carrierId: "CAR003"
+        ratePerKm: 4.0
+        minCharge: 250.0
+
+    # Mock Sellers (for RTS orders)
+    sellers:
+      - sellerId: "SEL001"
+        name: "Seller A"
+        canUsePartnerNetwork: true
+      - sellerId: "SEL002"
+        name: "Seller B"
+        canUsePartnerNetwork: true
+      - sellerId: "SEL003"
+        name: "Seller C"
+        canUsePartnerNetwork: false # This seller does not allow partner network
+
+    # Mock Ready-to-Ship Orders (for demonstration)
+    ready-to-ship-orders:
+      - orderId: "ORD001"
+        pickDate: 2025-07-30
+        deliverDate: 2025-08-05
+        sourceLocation:
+          id: "W001"
+          name: "Bengaluru Warehouse"
+          latitude: 12.9716
+          longitude: 77.5946
+        destinationLocation:
+          id: "C001"
+          name: "Delhi Customer"
+          latitude: 28.7041
+          longitude: 77.1025
+        productDetails:
+          - skuId: "SKU001"
+            quantity: 10
+            weightKg: 2.5
+            volumeM3: 0.01
+          - skuId: "SKU002"
+            quantity: 5
+            weightKg: 1.0
+            volumeM3: 0.005
+        seller: # Link to Seller A
+          sellerId: "SEL001"
+          name: "Seller A"
+          canUsePartnerNetwork: true
+      - orderId: "ORD002"
+        pickDate: 2025-07-31
+        deliverDate: 2025-08-07
+        sourceLocation:
+          id: "W001"
+          name: "Bengaluru Warehouse"
+          latitude: 12.9716
+          longitude: 77.5946
+        destinationLocation:
+          id: "C002"
+          name: "Mumbai Customer"
+          latitude: 19.0760
+          longitude: 72.8777
+        productDetails:
+          - skuId: "SKU003"
+            quantity: 20
+            weightKg: 0.5
+            volumeM3: 0.002
+        seller: # Link to Seller A
+          sellerId: "SEL001"
+          name: "Seller A"
+          canUsePartnerNetwork: true
+      - orderId: "ORD003"
+        pickDate: 2025-07-30
+        deliverDate: 2025-08-02
+        sourceLocation:
+          id: "W001"
+          name: "Bengaluru Warehouse"
+          latitude: 12.9716
+          longitude: 77.5946
+        destinationLocation:
+          id: "C001"
+          name: "Delhi Customer"
+          latitude: 28.7041
+          longitude: 77.1025
+        productDetails:
+          - skuId: "SKU004"
+            quantity: 3
+            weightKg: 15.0
+            volumeM3: 0.05
+        seller: # Link to Seller B
+          sellerId: "SEL002"
+          name: "Seller B"
+          canUsePartnerNetwork: true
+      - orderId: "ORD004" # Another order from Seller B to a new destination
+        pickDate: 2025-07-30
+        deliverDate: 2025-08-03
+        sourceLocation:
+          id: "W001"
+          name: "Bengaluru Warehouse"
+          latitude: 12.9716
+          longitude: 77.5946
+        destinationLocation:
+          id: "C003"
+          name: "Chennai Customer"
+          latitude: 13.0827
+          longitude: 80.2707
+        productDetails:
+          - skuId: "SKU005"
+            quantity: 5
+            weightKg: 2.0
+            volumeM3: 0.01
+        seller: # Link to Seller B
+          sellerId: "SEL002"
+          name: "Seller B"
+          canUsePartnerNetwork: true
+      - orderId: "ORD005" # Order from Seller C (no partner network)
+        pickDate: 2025-07-30
+        deliverDate: 2025-08-06
+        sourceLocation:
+          id: "W002"
+          name: "Hyderabad Warehouse"
+          latitude: 17.3850
+          longitude: 78.4867
+        destinationLocation:
+          id: "C001"
+          name: "Delhi Customer"
+          latitude: 28.7041
+          longitude: 77.1025
+        productDetails:
+          - skuId: "SKU006"
+            quantity: 8
+            weightKg: 1.5
+            volumeM3: 0.008
+        seller: # Link to Seller C
+          sellerId: "SEL003"
+          name: "Seller C"
+          canUsePartnerNetwork: false
