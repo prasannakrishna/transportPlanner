@@ -25,7 +25,6 @@ public class CarrierAvailability {
     @Column(name = "vehicle_number", length = 30)
     private String vehicleNumber;
 
-    @Enumerated(EnumType.STRING)
     @Column(name = "vehicle_type", length = 30)
     private String vehicleType;
 
