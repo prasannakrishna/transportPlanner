@@ -3,9 +3,11 @@ package com.bhagwat.scm.transportPlanner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import com.bhagwat.scm.observability.annotation.EnableObservability;
+import com.bhagwat.scm.core.rest.annotation.EnableRestClient;
 
 @SpringBootApplication
 @EnableObservability
+@EnableRestClient
 public class TransportPlannerApplication {
 
 	public static void main(String[] args) {
