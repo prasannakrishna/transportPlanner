@@ -7,6 +7,7 @@ import com.bhagwat.scm.transportPlanner.entity.*;
 import com.bhagwat.scm.transportPlanner.enums.*;
 import com.bhagwat.scm.transportPlanner.kafka.TransportPlanKafkaProducer;
 import com.bhagwat.scm.transportPlanner.orchestrator.CapacitySplitter;
+import com.bhagwat.scm.transportPlanner.orchestrator.PlanTypeCostEstimator;
 import com.bhagwat.scm.transportPlanner.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.time.Year;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -30,6 +32,9 @@ public class TransportPlanService {
     private final DistanceCalculator distanceCalculator;
     private final CarrierNetworkClient carrierNetworkClient;
     private final CapacitySplitter capacitySplitter;
+    private final PlanTypeCostEstimator costEstimator;
+    private final TransportOrderRepository transportOrderRepository;
+    private final TransportPlanLegRepository transportPlanLegRepository;
 
     // ── Plan number generation ────────────────────────────────────────────────
 
@@ -526,17 +531,50 @@ public class TransportPlanService {
         try {
             ShipmentType shipmentType = shipmentTypeStr != null
                     ? ShipmentType.valueOf(shipmentTypeStr) : ShipmentType.ORDER_TO_WAREHOUSE;
+
+            // Previously always PlanType.DIRECT regardless of cost — the real cost
+            // comparison (PlanTypeCostEstimator) only ever ran in the hourly BATCHED
+            // cron job, which in practice never finds work because this IMMEDIATE
+            // path already handles every RTS synchronously as soon as it's created.
+            // Populate the same fields ContractBasedPlanningService does so a single
+            // shipment gets a real DIRECT-vs-CROSSDOCK comparison too.
             RtsInfo rtsInfo = RtsInfo.builder()
                     .rtsId(rtsId)
+                    .rtsNumber((String) event.get("rtsNumber"))
+                    .sellerId((String) event.get("sellerId"))
+                    .sellerContractId((String) event.get("sellerContractId"))
+                    .sourceLocation(PlanLocationDto.builder()
+                            .locationId((String) event.get("orig_location_id"))
+                            .city((String) event.get("orig_city"))
+                            .state((String) event.get("orig_state"))
+                            .pincode((String) event.get("orig_pincode"))
+                            .locationType(LocationType.SELLER)
+                            .build())
+                    .destinationLocation(PlanLocationDto.builder()
+                            .locationId((String) event.get("dest_location_id"))
+                            .city((String) event.get("dest_city"))
+                            .state((String) event.get("dest_state"))
+                            .pincode((String) event.get("dest_pincode"))
+                            .locationType(LocationType.STORE)
+                            .build())
+                    .totalWeightKg(toBigDecimalOrZero(event.get("totalWeightKg")))
+                    .totalVolumeM3(toBigDecimalOrZero(event.get("totalVolumeM3")))
+                    .totalPackages(event.get("totalPackages") instanceof Number n ? n.intValue() : 0)
                     .build();
+
+            PlanTypeCostEstimator.PlanTypeSelection selection =
+                    costEstimator.selectOptimalType(List.of(rtsInfo), carrierId, null);
+            PlanType planType = selection.getSelectedType();
+
             CreateTransportPlanRequest req = CreateTransportPlanRequest.builder()
-                    .planType(PlanType.DIRECT)
+                    .planType(planType)
                     .carrierId(carrierId)
                     .carrierName((String) event.getOrDefault("carrierName", ""))
                     .shipmentType(shipmentType)
                     .transportMode(TransportMode.ROAD)
                     .loadType(LoadType.LTL)
                     .rtsOrders(List.of(rtsInfo))
+                    .notes("Auto-planned (immediate) | typeSelection: " + selection.getSelectionReason())
                     .build();
             TransportPlanResponse plan = createPlan(req);
 
@@ -562,16 +600,59 @@ public class TransportPlanService {
                 });
             }
 
-            log.info("Auto-created DIRECT plan {} for rtsId={} (scoring context: {})",
-                    plan.getPlanNumber(), rtsId, scoringContext != null ? "present" : "absent");
+            log.info("Auto-created {} plan {} for rtsId={} (reason: {}, scoring context: {})",
+                    planType, plan.getPlanNumber(), rtsId, selection.getSelectionReason(),
+                    scoringContext != null ? "present" : "absent");
         } catch (Exception e) {
             log.error("Failed to auto-create plan for rtsId={}: {}", rtsId, e.getMessage());
         }
     }
 
+    private BigDecimal toBigDecimalOrZero(Object val) {
+        if (val == null) return BigDecimal.ZERO;
+        if (val instanceof BigDecimal bd) return bd;
+        if (val instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
+        try { return new BigDecimal(val.toString()); } catch (NumberFormatException e) { return BigDecimal.ZERO; }
+    }
+
     @Transactional
     public void handleMilestoneEvent(String tsId, String milestone, Map<String, Object> event) {
-        log.info("Milestone {} for tsId={} — updating leg statuses where applicable", milestone, tsId);
+        Optional<TransportOrder> toOpt = transportOrderRepository.findByTransportShipmentId(tsId);
+        if (toOpt.isEmpty() || toOpt.get().getLegId() == null) {
+            log.info("Milestone {} for tsId={} — no linked TransportOrder/leg found, nothing to update", milestone, tsId);
+            return;
+        }
+
+        TransportOrder to = toOpt.get();
+        LegStatus newStatus = resolveLegStatus(milestone);
+        if (newStatus == null) {
+            log.info("Milestone {} for tsId={} — no leg-status mapping, ignoring", milestone, tsId);
+            return;
+        }
+
+        transportPlanLegRepository.findById(to.getLegId()).ifPresentOrElse(leg -> {
+            leg.setStatus(newStatus);
+            LocalDateTime now = LocalDateTime.now();
+            if ("PICKED".equalsIgnoreCase(milestone)) {
+                leg.setActualPickupDateTime(now);
+            } else if ("DELIVERED".equalsIgnoreCase(milestone)) {
+                leg.setActualDeliveryDateTime(now);
+            }
+            transportPlanLegRepository.save(leg);
+            log.info("Milestone {} for tsId={} — leg {} status -> {}", milestone, tsId, leg.getLegId(), newStatus);
+        }, () -> log.warn("Milestone {} for tsId={} — TransportOrder references missing legId={}",
+                milestone, tsId, to.getLegId()));
+    }
+
+    private LegStatus resolveLegStatus(String milestone) {
+        if (milestone == null) return null;
+        return switch (milestone.toUpperCase()) {
+            case "PICKED", "LOADED", "DEPARTED_ORIGIN", "IN_TRANSIT",
+                 "REACHED_HUB", "DEPARTED_HUB", "OUT_FOR_DELIVERY" -> LegStatus.IN_TRANSIT;
+            case "DELIVERED" -> LegStatus.COMPLETED;
+            case "DELIVERY_FAILED", "RETURNED_TO_ORIGIN" -> LegStatus.FAILED;
+            default -> null; // BOOKING_CONFIRMED / VEHICLE_ASSIGNED — leg stays PENDING
+        };
     }
 
     // ═════════════════════════════════════════════════════════════════════════

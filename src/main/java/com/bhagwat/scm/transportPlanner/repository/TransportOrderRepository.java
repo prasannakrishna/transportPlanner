@@ -15,4 +15,5 @@ public interface TransportOrderRepository extends JpaRepository<TransportOrder, 
     List<TransportOrder> findByStatus(TransportOrderStatus status);
     Optional<TransportOrder> findByLegId(String legId);
     List<TransportOrder> findAllByLegId(String legId);
+    Optional<TransportOrder> findByTransportShipmentId(String transportShipmentId);
 }
