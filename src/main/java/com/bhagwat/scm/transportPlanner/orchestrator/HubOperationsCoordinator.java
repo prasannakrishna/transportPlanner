@@ -10,10 +10,10 @@ import com.bhagwat.scm.transportPlanner.kafka.TransportPlanKafkaProducer;
 import com.bhagwat.scm.transportPlanner.repository.TransportOrderRepository;
 import com.bhagwat.scm.transportPlanner.repository.TransportPlanLegRepository;
 import com.bhagwat.scm.transportPlanner.repository.TransportPlanRepository;
+import com.bhagwat.scm.kafka.producer.KafkaMessageProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,7 +43,7 @@ import java.util.stream.Collectors;
 @Slf4j
 public class HubOperationsCoordinator {
 
-    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final KafkaMessageProducer kafkaMessageProducer;
     private final TransportPlanRepository planRepo;
     private final TransportPlanLegRepository legRepo;
     private final TransportOrderRepository toRepo;
@@ -78,7 +78,7 @@ public class HubOperationsCoordinator {
         });
 
         try {
-            kafkaTemplate.send(HUB_INBOUND_TOPIC, planId, event);
+            kafkaMessageProducer.send(HUB_INBOUND_TOPIC, planId, event);
             hubInboundTimestamps.put(planId, Instant.now());
             log.info("Published hub.inbound.arrived: planId={} legId={} hub={} consignments={}",
                     planId, legId, hubLocationId, consignmentIds.size());
@@ -158,7 +158,7 @@ public class HubOperationsCoordinator {
             });
 
             try {
-                kafkaTemplate.send(HUB_DELAYED_TOPIC, planId, delayEvent);
+                kafkaMessageProducer.send(HUB_DELAYED_TOPIC, planId, delayEvent);
             } catch (Exception e) {
                 log.error("Failed to publish hub.processing.delayed: {}", e.getMessage());
             }
