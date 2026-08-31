@@ -2,6 +2,7 @@ package com.bhagwat.scm.transportPlanner.service;
 
 import com.bhagwat.scm.transportPlanner.client.ContractManagerClient;
 import com.bhagwat.scm.transportPlanner.client.CarrierNetworkClient;
+import com.bhagwat.scm.transportPlanner.client.LogisticsCapabilityClient;
 import com.bhagwat.scm.transportPlanner.dto.*;
 import com.bhagwat.scm.transportPlanner.entity.*;
 import com.bhagwat.scm.transportPlanner.enums.*;
@@ -31,6 +32,7 @@ public class TransportPlanService {
     private final TransportPlanKafkaProducer kafkaProducer;
     private final DistanceCalculator distanceCalculator;
     private final CarrierNetworkClient carrierNetworkClient;
+    private final LogisticsCapabilityClient logisticsCapabilityClient;
     private final CapacitySplitter capacitySplitter;
     private final PlanTypeCostEstimator costEstimator;
     private final TransportOrderRepository transportOrderRepository;
@@ -689,11 +691,28 @@ public class TransportPlanService {
         String destPin = destination != null ? destination.getPincode() : null;
         DistanceCalculator.RouteMetrics metrics = distanceCalculator.calculate(originPin, destPin);
 
+        // Verify the assigned carrier actually covers this leg's pincode for
+        // its role (pickup vs delivery) — the carrier picked at RTS-booking
+        // time may only do first/mid-leg, not last-mile, or vice versa.
+        String legCarrierId = carrierId;
+        String legCarrierName = carrierName;
+        LogisticsCapabilityClient.Role role = legType == LegType.FIRST_LEG
+                ? LogisticsCapabilityClient.Role.PICKUP : LogisticsCapabilityClient.Role.DELIVERY;
+        String checkPincode = role == LogisticsCapabilityClient.Role.PICKUP ? originPin : destPin;
+        Optional<LogisticsCapabilityClient.Substitute> substitute =
+                logisticsCapabilityClient.checkCapability(carrierId, checkPincode, role);
+        if (substitute.isPresent()) {
+            log.info("Leg {} ({}, pincode={}): carrier {} is not {}-capable, substituting {}",
+                    seq, legType, checkPincode, carrierId, role, substitute.get().getCarrierId());
+            legCarrierId = substitute.get().getCarrierId();
+            legCarrierName = substitute.get().getCarrierName();
+        }
+
         return TransportPlanLeg.builder()
                 .legSequence(seq)
                 .legType(legType)
-                .carrierId(carrierId)
-                .carrierName(carrierName)
+                .carrierId(legCarrierId)
+                .carrierName(legCarrierName)
                 .transportMode(mode != null ? mode : TransportMode.ROAD)
                 .originLocation(toLocation(origin))
                 .destinationLocation(toLocation(destination))
