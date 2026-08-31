@@ -1,13 +1,13 @@
 package com.bhagwat.scm.transportPlanner.kafka;
 
+import com.bhagwat.scm.kafka.producer.KafkaMessageProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 @Component @RequiredArgsConstructor @Slf4j
 public class TransportPlanKafkaProducer {
-    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final KafkaMessageProducer kafkaMessageProducer;
 
     public void publishPlanCreated(String planId, Object payload) {
         send("transport.plan.created", planId, payload);
@@ -23,7 +23,11 @@ public class TransportPlanKafkaProducer {
 
     private void send(String topic, String key, Object payload) {
         try {
-            kafkaTemplate.send(topic, key, payload);
+            if (key == null) {
+                kafkaMessageProducer.send(topic, payload);
+            } else {
+                kafkaMessageProducer.send(topic, key, payload);
+            }
             log.info("Published to {} key={}", topic, key);
         } catch (Exception e) {
             log.error("Failed to publish to {}: {}", topic, e.getMessage());
