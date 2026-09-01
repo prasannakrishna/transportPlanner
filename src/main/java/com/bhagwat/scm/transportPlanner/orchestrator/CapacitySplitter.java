@@ -107,13 +107,16 @@ public class CapacitySplitter {
 
     /**
      * Validate that the carrier has an available vehicle with sufficient capacity
-     * for the planned date. Returns the best-fit vehicle assignment.
+     * for the planned date, with a driver actually able to drive it. Returns the
+     * best-fit vehicle+driver assignment.
      *
      * @param carrierId    carrier to check
      * @param mode         transport mode
      * @param weightKg     required weight capacity
      * @param volumeM3     required volume capacity (nullable)
-     * @param plannedDate  when the vehicle is needed
+     * @param plannedDate  when the vehicle (and driver) are needed — must fall
+     *                     within the availability slot's [availableFrom, availableTo]
+     *                     window; a null plannedDate skips the date check entirely
      * @return vehicle assignment if available, empty if no suitable vehicle
      */
     public Optional<VehicleAssignment> validateAndAssign(String carrierId, TransportMode mode,
@@ -127,7 +130,9 @@ public class CapacitySplitter {
             return Optional.empty();
         }
 
-        // Filter by sufficient capacity and transport mode
+        // Filter by sufficient capacity, transport mode, and — this was previously
+        // accepted as a parameter but never actually checked — the planned date
+        // falling within the slot's availability window.
         BigDecimal requiredWeight = weightKg != null ? weightKg : BigDecimal.ZERO;
         BigDecimal requiredVolume = volumeM3 != null ? volumeM3 : BigDecimal.ZERO;
 
@@ -136,34 +141,62 @@ public class CapacitySplitter {
                 .filter(a -> requiredVolume.compareTo(BigDecimal.ZERO) == 0
                         || (a.getCapacityCbm() != null && a.getCapacityCbm().compareTo(requiredVolume) >= 0))
                 .filter(a -> mode == null || mode == a.getTransportMode())
+                .filter(a -> plannedDate == null || isWithinWindow(a, plannedDate))
                 .toList();
 
         if (sufficient.isEmpty()) {
-            log.warn("No vehicle with sufficient capacity for carrier={} weight={}kg volume={}m³",
-                    carrierId, requiredWeight, requiredVolume);
+            log.warn("No vehicle with sufficient capacity for carrier={} weight={}kg volume={}m³ on {}",
+                    carrierId, requiredWeight, requiredVolume, plannedDate);
             return Optional.empty();
         }
 
-        // Best-fit: select smallest sufficient vehicle (minimize waste)
+        // Best-fit: prefer a slot with a driver already paired (a truck nobody can
+        // drive isn't dispatch-ready), then smallest sufficient capacity to
+        // minimize waste. Falling back to a driver-less slot rather than failing
+        // outright avoids blocking every activation while driver-pairing data is
+        // still being backfilled — but it's logged loudly since it means this
+        // booking isn't actually dispatch-ready yet.
         CarrierAvailability bestFit = sufficient.stream()
-                .min(Comparator.comparing(CarrierAvailability::getCapacityKg))
+                .sorted(Comparator
+                        .comparing((CarrierAvailability a) -> a.getDriverId() == null)
+                        .thenComparing(CarrierAvailability::getCapacityKg))
+                .findFirst()
                 .orElse(sufficient.get(0));
 
-        log.info("Vehicle assigned: carrier={} vehicle={} capacity={}kg (required={}kg)",
-                carrierId, bestFit.getVehicleNumber(), bestFit.getCapacityKg(), requiredWeight);
+        if (bestFit.getDriverId() == null) {
+            log.warn("Vehicle {} assigned for carrier={} but has NO driver paired — not actually dispatch-ready for {}",
+                    bestFit.getVehicleNumber(), carrierId, plannedDate);
+        } else {
+            log.info("Vehicle+driver assigned: carrier={} vehicle={} driver={} capacity={}kg (required={}kg) for {}",
+                    carrierId, bestFit.getVehicleNumber(), bestFit.getDriverName(), bestFit.getCapacityKg(), requiredWeight, plannedDate);
+        }
 
         return Optional.of(VehicleAssignment.builder()
                 .availabilityId(bestFit.getAvailabilityId())
                 .vehicleId(bestFit.getVehicleId())
                 .vehicleNumber(bestFit.getVehicleNumber())
+                .driverId(bestFit.getDriverId())
+                .driverName(bestFit.getDriverName())
+                .driverPhone(bestFit.getDriverPhone())
                 .capacityKg(bestFit.getCapacityKg())
                 .capacityCbm(bestFit.getCapacityCbm())
                 .build());
     }
 
+    private boolean isWithinWindow(CarrierAvailability a, LocalDateTime plannedDate) {
+        boolean afterStart = a.getAvailableFrom() == null || !plannedDate.isBefore(a.getAvailableFrom());
+        boolean beforeEnd = a.getAvailableTo() == null || !plannedDate.isAfter(a.getAvailableTo());
+        return afterStart && beforeEnd;
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    private BigDecimal getMaxVehicleCapacity(String carrierId, TransportMode mode) {
+    /**
+     * Largest vehicle capacity (kg) this carrier has on file — used both for
+     * bin-packing splits here and for consolidation-window decisions in
+     * PlanAmendmentService (is a plan full enough to close and activate?).
+     */
+    public BigDecimal getMaxVehicleCapacity(String carrierId, TransportMode mode) {
         // Try to get from largest available vehicle for this carrier
         List<CarrierAvailability> vehicles = availabilityRepo.findByCarrierId(carrierId);
         if (!vehicles.isEmpty()) {
@@ -192,6 +225,9 @@ public class CapacitySplitter {
         private String availabilityId;
         private String vehicleId;
         private String vehicleNumber;
+        private String driverId;
+        private String driverName;
+        private String driverPhone;
         private BigDecimal capacityKg;
         private BigDecimal capacityCbm;
     }

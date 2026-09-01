@@ -5,27 +5,41 @@ import com.bhagwat.scm.transportPlanner.dto.*;
 import com.bhagwat.scm.transportPlanner.entity.*;
 import com.bhagwat.scm.transportPlanner.enums.*;
 import com.bhagwat.scm.transportPlanner.kafka.TransportPlanKafkaProducer;
+import com.bhagwat.scm.transportPlanner.orchestrator.CapacitySplitter;
 import com.bhagwat.scm.transportPlanner.repository.*;
 import lombok.Builder;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Handles adding new RTS orders to existing DRAFT/PLANNED transport plans
- * and redistributing costs among all sellers in the plan.
+ * Handles adding new RTS orders to existing DRAFT/PLANNED transport plans,
+ * redistributing costs among all sellers in the plan, and deciding when an
+ * open (consolidating) plan should stop accepting more sellers and activate.
  *
  * Rules:
  * - DRAFT plan: add freely, no notifications
  * - PLANNED plan: add if capacity allows, notify all sellers of cost change
  * - ACTIVE plan: cannot modify, new RTS gets a new plan
+ *
+ * A plan auto-activates — closing it to further consolidation — the moment
+ * ANY of these trips, whichever comes first:
+ *   1. Real vehicle capacity (largest carrier vehicle on file) is reached
+ *   2. Seller count reaches transport.planning.max-sellers-per-plan
+ *   3. Its plannedStartDateTime arrives (checked by the scheduled sweep below)
+ * Without this, a plan would otherwise sit open indefinitely waiting for
+ * more sellers to consolidate into it, with only a human's manual
+ * "activate" click ever closing it.
  */
 @Service
 @RequiredArgsConstructor
@@ -35,6 +49,11 @@ public class PlanAmendmentService {
     private final TransportPlanRepository planRepo;
     private final TransportPlanKafkaProducer kafkaProducer;
     private final FreightRateClient freightRateClient;
+    private final CapacitySplitter capacitySplitter;
+    private final TransportPlanService planService;
+
+    @Value("${transport.planning.max-sellers-per-plan:3}")
+    private int maxSellersPerPlan;
 
     @Data @Builder
     public static class CostAllocation {
@@ -75,9 +94,9 @@ public class PlanAmendmentService {
                     .build();
         }
 
-        // Check vehicle capacity (simple weight check)
+        // Check vehicle capacity against this carrier's actual fleet, not a flat guess
         BigDecimal currentWeight = plan.getTotalWeightKg() != null ? plan.getTotalWeightKg() : BigDecimal.ZERO;
-        BigDecimal maxCapacity = BigDecimal.valueOf(10000); // Default truck capacity
+        BigDecimal maxCapacity = capacitySplitter.getMaxVehicleCapacity(plan.getCarrierId(), plan.getTransportMode());
         if (currentWeight.add(newWeightKg).compareTo(maxCapacity) > 0) {
             return AmendmentResult.builder()
                     .planId(planId).planNumber(plan.getPlanNumber())
@@ -111,6 +130,66 @@ public class PlanAmendmentService {
                 .totalPlanCost(plan.getTotalWeightKg()) // placeholder for actual cost
                 .costAllocations(allocations)
                 .build();
+    }
+
+    /**
+     * Checks whether a still-open (DRAFT/PLANNED) plan has hit its consolidation
+     * limit — real vehicle capacity, or the configured max-sellers-per-plan —
+     * and if so, activates it immediately instead of leaving it open for more
+     * sellers. Called after every successful addRtsToPlan() and after a fresh
+     * plan is created from a batch that's already at the limit. Failures to
+     * activate (e.g. no vehicle currently available) are logged, not thrown —
+     * the plan just stays open for the next attempt (a later add, or the
+     * plannedStartDateTime cutoff in closeStalePlans() below).
+     */
+    @Transactional
+    public void maybeAutoActivate(String planId) {
+        TransportPlan plan = planRepo.findById(planId).orElse(null);
+        if (plan == null) return;
+        if (plan.getStatus() != TransportPlanStatus.DRAFT && plan.getStatus() != TransportPlanStatus.PLANNED) return;
+
+        long sellerCount = plan.getOrders().stream()
+                .map(TransportPlanOrder::getOrderNumber)
+                .filter(Objects::nonNull)
+                .distinct()
+                .count();
+        BigDecimal totalWeight = plan.getTotalWeightKg() != null ? plan.getTotalWeightKg() : BigDecimal.ZERO;
+        BigDecimal maxCapacity = capacitySplitter.getMaxVehicleCapacity(plan.getCarrierId(), plan.getTransportMode());
+
+        boolean capacityFull = totalWeight.compareTo(maxCapacity) >= 0;
+        boolean maxSellersReached = sellerCount >= maxSellersPerPlan;
+        if (!capacityFull && !maxSellersReached) return;
+
+        log.info("Auto-activating plan {} — {} (sellers={}/{}, weight={}kg/{}kg)",
+                plan.getPlanNumber(), capacityFull ? "vehicle capacity reached" : "max sellers reached",
+                sellerCount, maxSellersPerPlan, totalWeight, maxCapacity);
+        try {
+            planService.activatePlan(planId);
+        } catch (Exception e) {
+            log.warn("Auto-activation deferred for plan {} (will retry on next add or cutoff sweep): {}",
+                    plan.getPlanNumber(), e.getMessage());
+        }
+    }
+
+    /**
+     * Cutoff side of consolidation: a plan shouldn't sit open forever waiting
+     * for one more seller. Every plan already gets a plannedStartDateTime when
+     * created (see ContractBasedPlanningService); once that arrives, close and
+     * activate the plan as-is, regardless of whether it ever hit capacity.
+     */
+    @Scheduled(fixedDelayString = "${transport.planning.cutoff-check-interval-ms:900000}")
+    public void closeStalePlans() {
+        List<TransportPlan> due = planRepo.findByStatusInAndPlannedStartDateTimeBefore(
+                List.of(TransportPlanStatus.DRAFT, TransportPlanStatus.PLANNED), LocalDateTime.now());
+        for (TransportPlan plan : due) {
+            log.info("Plan {} reached its plannedStartDateTime ({}) while still open — auto-activating as-is",
+                    plan.getPlanNumber(), plan.getPlannedStartDateTime());
+            try {
+                planService.activatePlan(plan.getPlanId());
+            } catch (Exception e) {
+                log.warn("Could not auto-activate plan {} at cutoff: {}", plan.getPlanNumber(), e.getMessage());
+            }
+        }
     }
 
     /**

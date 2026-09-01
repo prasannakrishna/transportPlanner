@@ -164,6 +164,10 @@ public class ContractBasedPlanningService {
                         .build();
                 amendmentService.addRtsToPlan(plan.getPlanId(), newOrder, toBd(order.get("totalWeightKg")));
             }
+            // Consolidating this batch in may have just filled the truck or hit
+            // the max-sellers cap — close the plan now instead of waiting for
+            // the next cycle or the plannedStartDateTime cutoff.
+            amendmentService.maybeAutoActivate(plan.getPlanId());
             return;
         }
 
@@ -187,6 +191,10 @@ public class ContractBasedPlanningService {
             // (plan service stores it during creation via customData field on the entity)
             log.info("Created {} plan {} for carrier={} origin={} with {} orders → {} destinations (cost-optimized)",
                     planType, plan.getPlanNumber(), carrierId, originCity, orders.size(), destinations.size());
+
+            // A single batch can already be at capacity or at the max-sellers
+            // cap the moment it's created — don't leave it open for more.
+            amendmentService.maybeAutoActivate(plan.getPlanId());
         } catch (Exception e) {
             log.error("Failed to create plan for carrier={} origin={}: {}", carrierId, originCity, e.getMessage());
         }

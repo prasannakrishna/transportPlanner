@@ -72,15 +72,15 @@ Communication between services is event-driven via Apache Kafka, ensuring loose 
 ### 3.1 Complete Entity Flow
 
 ```
-TransportRequest ──creates──▶ ReadyToShipOrder ──triggers──▶ CarrierBookingRequest
-                                     │                              │
-                                     │                    broadcast to carriers
-                                     │                              │
-                                     │                    best response accepted
-                                     │                              │
-                                     ▼                              ▼
-                              TransportPlan ◀──── carrier confirmed via CBR
-                                     │
+ReadyToShipOrder ──creates──▶ CarrierBookingRequest
+       │                              │
+       │                    broadcast to carriers
+       │                              │
+       │                    response accepted ──creates──▶ TransportRequest
+       │                              │
+       ▼                              ▼
+TransportPlan ◀──── carrier confirmed via CBR
+       │
                           ┌──────────┼──────────┐
                           │          │          │
                           ▼          ▼          ▼
@@ -545,68 +545,72 @@ ASN:                CREATED ──▶ SENT ──▶ ACKNOWLEDGED
 
 ## 7. End-to-End Flow (Step by Step)
 
-### Step 1: Transport Request Created
-- **Who**: Seller/Warehouse/Store needs goods moved
+### Step 1: Ready-to-Ship Order + Carrier Booking Request Created
+- **Who**: Seller/Warehouse/Store marks goods ready (or a logistics coordinator, manually)
 - **Service**: carrierService
-- **Action**: `POST /api/v1/carrier/transport-requests`
-- **Result**: TransportRequest with items created (status: PENDING)
+- **Action**: internal — `ShippingOrderReadyConsumer` consumes `transport.shipping-order.ready`
+  (published by sellerService/wmsService/storeService), or a coordinator calls
+  `POST /api/v1/carrier/bookings` directly for an ad-hoc booking
+- **Result**: ReadyToShipOrder created (status: READY) plus a CarrierBookingRequest
+  (status: DRAFT) linked to it via `rts.cbrId`. There is no standalone
+  transport-request-creation endpoint — a TransportRequest doesn't exist yet at
+  this point; it's only created once a carrier response is accepted (Step 3).
 
-### Step 2: Ready-to-Ship Order Created
-- **Who**: Warehouse confirms goods are packed
-- **Service**: carrierService
-- **Action**: `POST /api/v1/carrier/transport-requests/{trId}/create-rts`
-- **Result**: RTS created, Kafka event `transport.rts.created` published
-
-### Step 3: Carrier Booking
+### Step 2: Carrier Booking Broadcast
 - **Who**: System or logistics coordinator
 - **Service**: carrierService
-- **Action**: `POST /api/v1/carrier/bookings` → `POST /{cbrId}/broadcast`
-- **Result**: CBR broadcast to eligible carriers, responses collected
+- **Action**: `POST /api/v1/carrier/bookings/{cbrId}/broadcast`
+- **Result**: CBR broadcast to specified carriers, responses collected via
+  `POST /api/v1/carrier/bookings/carrier-response`
 
-### Step 4: Carrier Selection
-- **Who**: Logistics coordinator
+### Step 3: Carrier Selection → Transport Request Created
+- **Who**: Logistics coordinator, or the seller via `POST /api/v1/carrier/seller-selection/select`
 - **Service**: carrierService
-- **Action**: `POST /api/v1/carrier/bookings/{cbrId}/accept-response`
-- **Result**: Best carrier confirmed, RTS updated with carrierId
+- **Action**: both paths converge on `CarrierBookingService.acceptResponse()` —
+  either directly via `POST /api/v1/carrier/bookings/{cbrId}/accept-response`,
+  or through the seller-selection endpoint, which calls the same method
+- **Result**: Winning response accepted, other responses declined, TransportRequest
+  created (status: PENDING), RTS updated with carrierId and trId, Kafka event
+  `transport.rts.created` published
 
-### Step 5: Transport Plan Created
+### Step 4: Transport Plan Created
 - **Who**: Auto (via Kafka) or manual
 - **Service**: transportPlanner
 - **Action**: `POST /api/v1/transport/plans` (or auto from `transport.rts.created`)
 - **Result**: Plan with legs, orders, consignments created (status: DRAFT → PLANNED)
 
-### Step 6: Plan Activated & Transport Orders Generated
+### Step 5: Plan Activated & Transport Orders Generated
 - **Who**: Logistics coordinator
 - **Service**: transportPlanner
 - **Action**: `POST /api/v1/transport/plans/{planId}/activate` → auto-calls `generate`
 - **Result**: TransportOrders created (one per leg), Kafka `transport.order.created` published
 
-### Step 7: Shipment Created for Execution
+### Step 6: Shipment Created for Execution
 - **Who**: Auto (Kafka consumer)
 - **Service**: carrierService
 - **Action**: Consumes `transport.order.created`, creates TransportShipment
 - **Result**: Shipment ready for execution, `transport.shipment.created` published back
 
-### Step 8: Vehicle & Driver Assignment
+### Step 7: Vehicle & Driver Assignment
 - **Who**: Fleet manager / dispatcher
 - **Service**: carrierService
 - **Action**: `PATCH /api/v1/carrier/shipments/{tsId}/assign-vehicle`
 - **Result**: Vehicle and driver assigned to shipment
 
-### Step 9: Milestone Posting (Execution)
+### Step 8: Milestone Posting (Execution)
 - **Who**: Driver / system (GPS)
 - **Service**: carrierService
 - **Action**: `POST /api/v1/carrier/shipments/milestones`
 - **Milestones**: PICKED → LOADED → DEPARTED_ORIGIN → IN_TRANSIT → REACHED_HUB → OUT_FOR_DELIVERY → DELIVERED
 - **Result**: Shipment status advances, Kafka events published
 
-### Step 10: ASN Sent
+### Step 9: ASN Sent
 - **Who**: Auto (on PICKED milestone)
 - **Service**: carrierService
 - **Action**: ASN generated and sent to consignee
 - **Result**: Receiving party prepared for incoming goods
 
-### Step 11: Delivery Confirmation
+### Step 10: Delivery Confirmation
 - **Who**: Driver posts DELIVERED milestone
 - **Service**: carrierService
 - **Action**: Kafka `transport.shipment.delivered` published
