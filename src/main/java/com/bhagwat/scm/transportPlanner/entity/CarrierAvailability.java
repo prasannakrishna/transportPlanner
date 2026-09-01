@@ -28,6 +28,16 @@ public class CarrierAvailability {
     @Column(name = "vehicle_type", length = 30)
     private String vehicleType;
 
+    /** Driver paired with this vehicle for this availability window — required for validateAndAssign() to treat the slot as dispatch-ready, not just capacity-sufficient. */
+    @Column(name = "driver_id", length = 100)
+    private String driverId;
+
+    @Column(name = "driver_name", length = 200)
+    private String driverName;
+
+    @Column(name = "driver_phone", length = 20)
+    private String driverPhone;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "transport_mode", length = 20)
     private TransportMode transportMode;

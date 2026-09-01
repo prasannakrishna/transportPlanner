@@ -490,18 +490,22 @@ public class TransportPlanService {
                     + plan.getCarrierId() + " (required: " + totalWeight + "kg)");
         }
 
-        // Assign vehicle to first leg (or all legs for single-carrier plans)
+        // Assign vehicle + driver to first leg (or all legs for single-carrier plans)
         CapacitySplitter.VehicleAssignment assignment = vehicleAssignment.get();
         if (!plan.getLegs().isEmpty()) {
             TransportPlanLeg firstLeg = plan.getLegs().get(0);
             firstLeg.setVehicleId(assignment.getVehicleId());
             firstLeg.setVehicleNumber(assignment.getVehicleNumber());
+            firstLeg.setDriverId(assignment.getDriverId());
+            firstLeg.setDriverName(assignment.getDriverName());
+            firstLeg.setDriverPhone(assignment.getDriverPhone());
         }
 
         plan.setStatus(TransportPlanStatus.ACTIVE);
         TransportPlan saved = planRepository.save(plan);
         kafkaProducer.publishPlanUpdated(planId, Map.of("planId", planId, "status", "ACTIVE",
-                "vehicleId", assignment.getVehicleId() != null ? assignment.getVehicleId() : ""));
+                "vehicleId", assignment.getVehicleId() != null ? assignment.getVehicleId() : "",
+                "driverId", assignment.getDriverId() != null ? assignment.getDriverId() : ""));
         return toResponse(saved);
     }
 
@@ -848,6 +852,7 @@ public class TransportPlanService {
                 .transportMode(leg.getTransportMode()).status(leg.getStatus())
                 .carrierId(leg.getCarrierId()).carrierName(leg.getCarrierName())
                 .vehicleId(leg.getVehicleId()).vehicleNumber(leg.getVehicleNumber())
+                .driverId(leg.getDriverId()).driverName(leg.getDriverName()).driverPhone(leg.getDriverPhone())
                 .originLocation(toLocationDto(leg.getOriginLocation()))
                 .destinationLocation(toLocationDto(leg.getDestinationLocation()))
                 .plannedPickupDateTime(leg.getPlannedPickupDateTime())

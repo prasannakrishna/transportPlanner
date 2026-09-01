@@ -11,6 +11,9 @@ public class CarrierAvailabilityResponse {
     private String vehicleId;
     private String vehicleNumber;
     private String vehicleType;
+    private String driverId;
+    private String driverName;
+    private String driverPhone;
     private TransportMode transportMode;
     private PlanLocationDto baseLocation;
     private LocalDateTime availableFrom;

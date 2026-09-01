@@ -44,6 +44,15 @@ public class TransportPlanLeg {
     @Column(name = "vehicle_number", length = 30)
     private String vehicleNumber;
 
+    @Column(name = "driver_id", length = 100)
+    private String driverId;
+
+    @Column(name = "driver_name", length = 200)
+    private String driverName;
+
+    @Column(name = "driver_phone", length = 20)
+    private String driverPhone;
+
     @Embedded
     @AttributeOverrides({
         @AttributeOverride(name = "locationId",   column = @Column(name = "orig_location_id")),

@@ -46,6 +46,8 @@ public class TransportOrderService {
                     .carrierName(leg.getCarrierName() != null ? leg.getCarrierName() : plan.getCarrierName())
                     .vehicleId(leg.getVehicleId())
                     .vehicleNumber(leg.getVehicleNumber())
+                    .driverId(leg.getDriverId())
+                    .driverName(leg.getDriverName())
                     .shipmentType(plan.getShipmentType())
                     .transportMode(leg.getTransportMode() != null ? leg.getTransportMode() : plan.getTransportMode())
                     .loadType(plan.getLoadType())

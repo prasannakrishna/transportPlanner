@@ -15,6 +15,9 @@ public class TransportPlanLegDto {
     private String carrierName;
     private String vehicleId;
     private String vehicleNumber;
+    private String driverId;
+    private String driverName;
+    private String driverPhone;
     private PlanLocationDto originLocation;
     private PlanLocationDto destinationLocation;
     private LocalDateTime plannedPickupDateTime;
