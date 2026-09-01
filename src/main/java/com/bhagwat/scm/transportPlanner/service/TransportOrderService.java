@@ -40,6 +40,7 @@ public class TransportOrderService {
                     .toNumber(toNumber)
                     .planId(plan.getPlanId())
                     .planNumber(plan.getPlanNumber())
+                    .rtsId(plan.getRtsId())
                     .legId(leg.getLegId())
                     .carrierId(leg.getCarrierId() != null ? leg.getCarrierId() : plan.getCarrierId())
                     .carrierName(leg.getCarrierName() != null ? leg.getCarrierName() : plan.getCarrierName())

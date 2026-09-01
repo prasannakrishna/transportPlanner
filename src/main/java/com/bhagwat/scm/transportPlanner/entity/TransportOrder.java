@@ -30,6 +30,15 @@ public class TransportOrder {
     @Column(name = "plan_number", length = 30)
     private String planNumber;
 
+    /**
+     * The RTS this order traces back to, so carrierService can reconcile
+     * against a TransportShipment it may have already created eagerly at
+     * RTS-booking time instead of creating a duplicate — see
+     * TransportShipmentService.createFromTransportOrder().
+     */
+    @Column(name = "rts_id", length = 100)
+    private String rtsId;
+
     @Column(name = "leg_id", length = 100)
     private String legId;
 
